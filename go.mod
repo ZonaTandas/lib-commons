@@ -3,7 +3,6 @@ module github.com/ZonaTandas/lib-commons
 go 1.26
 
 require (
-	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/mux v1.8.1
 	github.com/prometheus/client_golang v1.20.5
 	github.com/rabbitmq/amqp091-go v1.12.0
