@@ -1,61 +1,66 @@
-# lib-commons/jwt
+# lib-commons
 
-Minimal JWT library for service-to-service authentication.
+Librería Go compartida del ecosistema ZonaTandas.
 
-## Requirements
+- Módulo: **`github.com/ZonaTandas/lib-commons`** (go.mod en la raíz del repo).
+- Paquetes: `src/jwt` (JWT service-to-service) y `src/obs` (observabilidad:
+  logs JSON + traceId + métricas; evolutivo 2026-07-observabilidad).
 
-`JWT_SECRET` **must** be set in the environment. It is never optional.
+## Consumo desde un servicio
 
-Every service using this library must load the environment as the **very first import** in `main.go`:
+```bash
+go get github.com/ZonaTandas/lib-commons@v0.0.1
+```
 
-```go
-import (
-    _ "github.com/joho/godotenv/autoload" // loads .env automatically — must be first
-    // ... rest of imports
+El repo es privado: el Dockerfile del servicio necesita el patrón `GH_PAT` +
+`GOPRIVATE=github.com/ZonaTandas/*` (igual que lib-track-management). Para
+publicar una versión: `git tag v0.0.X && git push --tags`.
+
+Para desarrollo local sin publicar, cada servicio usa un `go.work` (NO se
+commitea; está en .gitignore) que apunta a esta copia local:
+
+```
+go 1.26
+
+use (
+	.
+	../../lib-commons
 )
 ```
 
-And provide a `.env` file (or inject the variable directly in the environment):
-
-```env
-JWT_SECRET=your-super-secret-key
-```
-
-## Usage
-
-### Generate a token
+## src/obs — observabilidad
 
 ```go
-import jwtlib "lib-commons/src/jwt"
+import (
+    "github.com/ZonaTandas/lib-commons/src/obs"
+    "github.com/ZonaTandas/lib-commons/src/obs/obsamqp"
+    "github.com/ZonaTandas/lib-commons/src/obs/obsmetrics"
+)
 
-token, err := jwtlib.GenerateToken(jwtlib.Claims{
-    UserId:      "user-uuid",
-    TrackId:     "track-uuid",
-    OrganizerId: "organizer-uuid",
-    ActivityId:  "activity-uuid",
-    IsAuth:      false,
-})
-```
+func main() {
+    obs.Init("mi-servicio") // slog JSON a stdout con service fijo
 
-### Verify a token
-
-```go
-claims, err := jwtlib.VerifyToken(token)
-if err != nil {
-    // jwtlib.ErrExpiredToken → token has expired
-    // jwtlib.ErrInvalidToken → bad signature or malformed
+    router := mux.NewRouter()
+    router.Use(obs.Middleware, obsmetrics.Middleware)
+    router.Handle("/metrics", internalapi.ServiceToken(obsmetrics.Handler()))
 }
-// claims.UserId, claims.IsAuth, claims.Exp ...
 ```
 
-## Claims
+- `obs.Middleware`: extrae/genera `X-Trace-Id`, lo devuelve en la respuesta,
+  loguea la línea de acceso `http_request` con route (template de mux),
+  status, duración, campos de negocio y cuerpos (escrituras + errores,
+  truncados y enmascarados). Implementa Flusher/Hijacker (SSE OK).
+- `obs.Add(ctx, "pnr", pnr)`: acumula campos de negocio que salen en la línea
+  de acceso y en todo `obs.Logger(ctx)`.
+- `obs.Logger(ctx)`: sustituto de `fmt.Println` — slog con traceId + campos.
+- `obs.NewRequest/Do`: clientes HTTP inter-servicio con propagación del trace
+  y log `http_out`.
+- `obs.Detach(ctx)`: para goroutines best-effort (sobrevive a la cancelación
+  de la request y copia traceId/campos). Llamar SIEMPRE antes del `go func`.
+- `obsamqp.Inject/Extract`: header AMQP `x-trace-id` (publisher/consumer).
+- `obsmetrics`: `http_requests_total{route,method,status}` +
+  `http_request_duration_seconds{route,method}`.
 
-| Field         | Type     | Description                                              |
-|---------------|----------|----------------------------------------------------------|
-| `UserId`      | `string` | User UUID                                                |
-| `TrackId`     | `string` | Track UUID                                               |
-| `OrganizerId` | `string` | Organizer UUID                                           |
-| `ActivityId`  | `string` | Activity UUID                                            |
-| `IsAuth`      | `bool`   | Whether the token has already been verified downstream   |
-| `Exp`         | `int64`  | Expiration timestamp (set automatically, 1 hour)         |
-| `Iat`         | `int64`  | Issued-at timestamp (set automatically)                  |
+Envs (con defaults): `OBS_LOG_LEVEL=info`, `OBS_MAX_BODY_BYTES=8192`,
+`OBS_CAPTURE_BODIES=writes+errors|errors|off`, `OBS_SAMPLE_PATHS` (CSV de
+prefijos que solo loguean errores: availability, SSE).
