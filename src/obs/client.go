@@ -19,6 +19,7 @@ func NewRequest(ctx context.Context, method, url string, body io.Reader) (*http.
 	if tid := TraceID(ctx); tid != "" {
 		req.Header.Set(HeaderTraceID, tid)
 	}
+	SetInternalAuth(req)
 	return req, nil
 }
 
@@ -34,6 +35,7 @@ func Do(ctx context.Context, client *http.Client, req *http.Request) (*http.Resp
 			req.Header.Set(HeaderTraceID, tid)
 		}
 	}
+	SetInternalAuth(req)
 	start := time.Now()
 	resp, err := client.Do(req)
 	durationMs := time.Since(start).Milliseconds()

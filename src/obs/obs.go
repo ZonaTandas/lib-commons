@@ -22,6 +22,13 @@ import (
 // frontends y viaja por HTTP, AMQP (header x-trace-id) y el outbox.
 const HeaderTraceID = "X-Trace-Id"
 
+// HeaderInternalAuth es la cabecera de verificación de origen interno
+// (evolutivo 2026-07-red-interna-auth): las llamadas entre servicios (y desde
+// los BFF web-app/web-panel) la llevan con el INTERNAL_SHARED_SECRET o con un
+// token caducable derivado de él (ver internalauth.go). RequireInternalAuth
+// la valida en la entrada.
+const HeaderInternalAuth = "X-Internal-Auth"
+
 type ctxKeyTraceID struct{}
 
 // Init instala slog.Default como JSONHandler a stdout con el atributo fijo

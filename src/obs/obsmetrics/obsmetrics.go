@@ -38,7 +38,22 @@ var (
 		Help:    "Duración de las peticiones HTTP por template de ruta y método.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"route", "method"})
+
+	internalAuthTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "internal_auth_requests_total",
+		Help: "Resultado de la verificación X-Internal-Auth por template de ruta (evolutivo 2026-07-red-interna-auth). result: ok_secret|ok_token|missing|invalid|expired|unconfigured|exempt.",
+	}, []string{"result", "route"})
 )
+
+// El counter se engancha a obs.RequireInternalAuth vía el observer: obsmetrics
+// ya se importa en todos los servicios (router.Use), así que basta el init.
+// En Grafana, la fase 1 del rollout se vigila con
+// sum by (result) (rate(internal_auth_requests_total[5m])).
+func init() {
+	obs.SetInternalAuthObserver(func(result, route string) {
+		internalAuthTotal.WithLabelValues(result, route).Inc()
+	})
+}
 
 // Middleware instrumenta cada request. Salta /health y /metrics.
 func Middleware(next http.Handler) http.Handler {
