@@ -1,23 +1,91 @@
 # lib-commons
 
-Librería Go compartida del ecosistema ZonaTandas.
+Librería Go compartida del ecosistema ZonaTandas. Contiene el núcleo de
+observabilidad (`src/obs`: logs JSON + traceId extremo a extremo + captura de
+cuerpos enmascarados), la verificación de origen interno `X-Internal-Auth`
+(evolutivo 2026-07-red-interna-auth), y sus subpaquetes opcionales de métricas
+(`obsmetrics`) y AMQP (`obsamqp`). No es un servicio: no se despliega.
 
 - Módulo: **`github.com/ZonaTandas/lib-commons`** (go.mod en la raíz del repo).
-- Paquetes: `src/jwt` (JWT service-to-service) y `src/obs` (observabilidad:
-  logs JSON + traceId + métricas; evolutivo 2026-07-observabilidad).
+- **La usan los 23 servicios Go** de la plataforma (obs/obsmetrics en todos;
+  obsamqp en los que hablan RabbitMQ: booking-service, booking-queue-service,
+  booking-workers-service, boxes-service, payment-core-service,
+  payment-stripe-service).
 
-## Consumo desde un servicio
+## Paquetes
 
-```bash
-go get github.com/ZonaTandas/lib-commons@v0.0.1
+| Paquete | Qué aporta |
+|---------|------------|
+| `src/obs` | `Init` (slog JSON), `Middleware` (X-Trace-Id + línea `http_request` + cuerpos ≤8KB enmascarados), `Logger(ctx)`/`Add(ctx,k,v)` (campos de negocio), `NewRequest`/`Do` (clientes salientes con trace + `http_out` + X-Internal-Auth), `Detach` (goroutines best-effort), `MaskJSON`, `RequireInternalAuth`/`ValidateInternalAuth`/`NewInternalAuthToken` |
+| `src/obs/obsmetrics` | `http_requests_total{route,method,status}`, `http_request_duration_seconds{route,method}`, `internal_auth_requests_total{result,route}`; `Handler()`/`TokenHandler()` para `/metrics` |
+| `src/obs/obsamqp` | `Inject`/`Extract` del header AMQP `x-trace-id` |
+| `cmd/internal-token` | CLI que emite tokens caducables de X-Internal-Auth |
+
+## Uso en un servicio
+
+```go
+import (
+    "github.com/ZonaTandas/lib-commons/src/obs"
+    "github.com/ZonaTandas/lib-commons/src/obs/obsmetrics"
+)
+
+func main() {
+    obs.Init("mi-servicio")
+    router := mux.NewRouter()
+    router.Use(obs.Middleware, obs.RequireInternalAuth, obsmetrics.Middleware)
+    router.Handle("/metrics", obsmetrics.TokenHandler())
+}
 ```
 
-El repo es privado: el Dockerfile del servicio necesita el patrón `GH_PAT` +
-`GOPRIVATE=github.com/ZonaTandas/*` (igual que lib-track-management). Para
-publicar una versión: `git tag v0.0.X && git push --tags`.
+- `obs.Middleware`: extrae/genera `X-Trace-Id`, lo devuelve en la respuesta,
+  loguea `http_request` con route (template de mux), status, duración, campos
+  de negocio y cuerpos (escrituras + errores, truncados y enmascarados).
+  Implementa Flusher/Hijacker (SSE OK). Salta `/health` y `/metrics`.
+- `obs.RequireInternalAuth`: valida `X-Internal-Auth` (secreto compartido o
+  token caducable `v1.<subject>.<exp>.<hmac>`). Log-only por defecto;
+  `INTERNAL_AUTH_ENFORCE=true` → 403 (fail-closed si no hay secreto).
+  Exenciones: `/health`, `/metrics` y los prefijos de
+  `INTERNAL_AUTH_EXEMPT_PATHS`.
+- `obs.NewRequest`/`obs.Do`: clientes HTTP inter-servicio; propagan el trace,
+  añaden `X-Internal-Auth` y loguean `http_out`. **Solo para llamadas a
+  servicios internos**: adjuntan el secreto a cualquier destino (no usar
+  contra APIs de terceros).
+- `obs.Add(ctx, "pnr", pnr)` + `obs.Logger(ctx)`: campos de negocio y logger
+  con traceId; sustituto de `fmt.Println`.
+- `obs.Detach(ctx)`: para goroutines best-effort; llamar SIEMPRE antes del
+  `go func`. No añade cancelación (dependen del timeout de su http.Client).
+- `obsamqp.Inject/Extract`: correlación por RabbitMQ (publisher/consumer).
+
+## Token de acceso para desarrollo (Postman/curl)
+
+Los servicios con enforce activo exigen `X-Internal-Auth`. Sin repartir el
+secreto, emite un token caducable:
+
+```bash
+INTERNAL_SHARED_SECRET=... go run ./cmd/internal-token -subject dev-<nombre> -ttl 2h
+# → poner la salida en la cabecera X-Internal-Auth
+```
+
+Cualquier servicio lo valida offline (HMAC-SHA256 + expiración); el subject
+sale en logs y métricas para auditoría.
+
+## Variables de entorno
+
+Ver `.env.sample`. Todas las lee la librería en runtime desde el proceso del
+servicio que la importa (la lib no carga ficheros .env).
+
+## Consumo y publicación
+
+```bash
+go get github.com/ZonaTandas/lib-commons@v0.1.0
+```
+
+El repo es privado: el Dockerfile del servicio necesita `ARG GH_PAT` +
+`GOPRIVATE=github.com/ZonaTandas/*` + `git config url...insteadOf` (patrón de
+track-management-service). Publicar versión: `git tag v0.1.X && git push --tags`.
 
 Para desarrollo local sin publicar, cada servicio usa un `go.work` (NO se
-commitea; está en .gitignore) que apunta a esta copia local:
+commitea; está en su .gitignore):
 
 ```
 go 1.26
@@ -28,39 +96,11 @@ use (
 )
 ```
 
-## src/obs — observabilidad
+## Tests
 
-```go
-import (
-    "github.com/ZonaTandas/lib-commons/src/obs"
-    "github.com/ZonaTandas/lib-commons/src/obs/obsamqp"
-    "github.com/ZonaTandas/lib-commons/src/obs/obsmetrics"
-)
-
-func main() {
-    obs.Init("mi-servicio") // slog JSON a stdout con service fijo
-
-    router := mux.NewRouter()
-    router.Use(obs.Middleware, obsmetrics.Middleware)
-    router.Handle("/metrics", internalapi.ServiceToken(obsmetrics.Handler()))
-}
+```bash
+go build ./... && go vet ./... && go test ./... -cover
 ```
 
-- `obs.Middleware`: extrae/genera `X-Trace-Id`, lo devuelve en la respuesta,
-  loguea la línea de acceso `http_request` con route (template de mux),
-  status, duración, campos de negocio y cuerpos (escrituras + errores,
-  truncados y enmascarados). Implementa Flusher/Hijacker (SSE OK).
-- `obs.Add(ctx, "pnr", pnr)`: acumula campos de negocio que salen en la línea
-  de acceso y en todo `obs.Logger(ctx)`.
-- `obs.Logger(ctx)`: sustituto de `fmt.Println` — slog con traceId + campos.
-- `obs.NewRequest/Do`: clientes HTTP inter-servicio con propagación del trace
-  y log `http_out`.
-- `obs.Detach(ctx)`: para goroutines best-effort (sobrevive a la cancelación
-  de la request y copia traceId/campos). Llamar SIEMPRE antes del `go func`.
-- `obsamqp.Inject/Extract`: header AMQP `x-trace-id` (publisher/consumer).
-- `obsmetrics`: `http_requests_total{route,method,status}` +
-  `http_request_duration_seconds{route,method}`.
-
-Envs (con defaults): `OBS_LOG_LEVEL=info`, `OBS_MAX_BODY_BYTES=8192`,
-`OBS_CAPTURE_BODIES=writes+errors|errors|off`, `OBS_SAMPLE_PATHS` (CSV de
-prefijos que solo loguean errores: availability, SSE).
+Coverage actual ≥95% (evolutivo 2026-07-revision-y-testing); corren en cada
+push vía `.github/workflows/tests.yaml`.
