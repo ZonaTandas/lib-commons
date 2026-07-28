@@ -2,6 +2,8 @@ module github.com/ZonaTandas/lib-commons
 
 go 1.26
 
+toolchain go1.26.5
+
 require (
 	github.com/gorilla/mux v1.8.1
 	github.com/prometheus/client_golang v1.20.5

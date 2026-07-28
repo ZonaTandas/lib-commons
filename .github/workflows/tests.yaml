@@ -14,10 +14,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26"
+          go-version: "1.26.5"
       - name: Vet
         run: go vet ./...
       - name: Tests con coverage
         run: go test ./... -coverprofile=coverage.out
       - name: Coverage (informativo)
         run: go tool cover -func=coverage.out | tail -1
+      # Informativo de momento (bundle B2 del evolutivo de saneamiento): pasa a
+      # bloqueante cuando los 23 repos estén en un toolchain sin vulns de stdlib.
+      - name: govulncheck (informativo)
+        continue-on-error: true
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...

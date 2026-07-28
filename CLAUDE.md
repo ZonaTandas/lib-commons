@@ -6,7 +6,7 @@ Librería Go compartida del ecosistema **ZonaTandas** (SaaS de gestión de tanda
 
 - Módulo Go: **`github.com/ZonaTandas/lib-commons`** (renombrado 2026-07-15; antes era `lib-commons` y nadie podía importarlo — ver gotchas).
 - El `go.mod` vive en la **raíz del repo** (patrón lib-track-management); los paquetes bajo `src/`.
-- Go 1.26. Dependencias: `gorilla/mux` (template de ruta en obs), `prometheus/client_golang` (solo obsmetrics), `rabbitmq/amqp091-go` (solo obsamqp).
+- Go 1.26, `toolchain go1.26.5` (bundle B2 del saneamiento: 1.26.0 arrastra ~14 vulns de stdlib alcanzables). Dependencias: `gorilla/mux` (template de ruta en obs), `prometheus/client_golang` (solo obsmetrics), `rabbitmq/amqp091-go` (solo obsamqp).
 - Remote: `https://github.com/ZonaTandas/lib-commons.git`.
 - **La consumen los 23 servicios Go** de la plataforma.
 
@@ -17,6 +17,12 @@ go.mod              # módulo github.com/ZonaTandas/lib-commons (RAÍZ del repo)
 .github/workflows/tests.yaml  # go vet + go test con coverage en cada push
 .env.sample         # inventario de env vars que LEE la lib (no carga .env)
 cmd/internal-token/ # CLI: emite tokens caducables de X-Internal-Auth
+src/authn/          # verificación de identidad entre servicios
+  verifysession.go  # VerifySession: sesión de usuario contra oauth /verify,
+                    # con traceId + X-Internal-Auth; errores tipados
+                    # (ErrNoSession/ErrInvalidSession/ErrUpstream/ErrNotConfigured)
+  servicetoken.go   # CheckServiceToken: AUTH_SERVICE_TOKEN fail-closed,
+                    # leído por request, comparado en tiempo constante
 src/obs/            # núcleo observabilidad (stdlib + gorilla/mux)
   obs.go            # Init(service) / NewTraceID / TraceID / WithTraceID
   fields.go         # Add(ctx,k,v) + Logger(ctx) — bolsa mutable en ctx
@@ -67,4 +73,6 @@ Ver `.env.sample` (inventario completo comentado). La lib no carga ficheros .env
 7. `RequireInternalAuth` en enforce sin secreto configurado devuelve 403 (fail-closed, intencional). Las exenciones (`INTERNAL_AUTH_EXEMPT_PATHS`) son por PREFIJO: `/contents` también exime `/contents-admin`.
 8. El núcleo obs importa `gorilla/mux` (para el template de ruta): no es 100% stdlib, pero todos los servicios ya usan mux. Copiable como plan B igualmente.
 9. `traceId` **jamás** debe ser label de Loki ni de Prometheus (cardinalidad); en Prometheus `route` es siempre el template de mux.
-10. Ramas inalcanzables conocidas (quedan sin cubrir, es esperado): el `"[error al enmascarar]"` de MaskJSON, la redacción por clave heredada en el caso escalar de maskValue, el fallback de NewTraceID y los `os.Exit` del CLI.
+10. **`authn.VerifySession` nunca lleva la URL de oauth dentro**: se pasa por parámetro (env del servicio, con DNS de clúster). El hallazgo `profiles-01` fue exactamente eso: `https://oauth.service.zonatandas.es` hardcodeado, tráfico interno saliendo al ingress.
+11. **`authn.CheckServiceToken` con `AUTH_SERVICE_TOKEN` vacío devuelve `(false,false)`**: el llamante debe responder **503**, no 401 — es misconfig nuestra, no credencial mala del cliente. Colapsar ambos en 401 esconde el despliegue roto.
+12. Ramas inalcanzables conocidas (quedan sin cubrir, es esperado): el `"[error al enmascarar]"` de MaskJSON, la redacción por clave heredada en el caso escalar de maskValue, el fallback de NewTraceID y los `os.Exit` del CLI.
