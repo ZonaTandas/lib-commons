@@ -126,9 +126,13 @@ func VerifySessionWithClient(ctx context.Context, client *http.Client, oauthBase
 	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
 		return User{}, fmt.Errorf("%w: respuesta ilegible: %v", ErrUpstream, err)
 	}
-	if user.ID == "" {
-		return User{}, fmt.Errorf("%w: respuesta sin id", ErrUpstream)
-	}
 	user.Email = strings.ToLower(strings.TrimSpace(user.Email))
+	// El contrato de /verify siempre trae id y email. Una respuesta a la que
+	// le falte uno no es "usuario sin email": es oauth devolviendo algo roto,
+	// y aceptarla propaga un UserID/Email vacío aguas abajo que revienta más
+	// tarde y más lejos.
+	if user.ID == "" || user.Email == "" {
+		return User{}, fmt.Errorf("%w: respuesta incompleta (id=%q email=%q)", ErrUpstream, user.ID, user.Email)
+	}
 	return user, nil
 }

@@ -105,7 +105,7 @@ func TestVerifySessionErroresDeEntrada(t *testing.T) {
 }
 
 func TestVerifySessionRespuestaIlegibleOSinIdEsUpstream(t *testing.T) {
-	for _, body := range []string{`no json`, `{"id":"","email":"x"}`} {
+	for _, body := range []string{`no json`, `{"id":"","email":"x"}`, `{"id":"u","email":""}`} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(body))
 		}))
@@ -130,7 +130,7 @@ func TestVerifySessionSinServiceTokenNoMandaAuthorization(t *testing.T) {
 	var hadAuth bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, hadAuth = r.Header["Authorization"]
-		_, _ = w.Write([]byte(`{"id":"u"}`))
+		_, _ = w.Write([]byte(`{"id":"u","email":"e@x.es"}`))
 	}))
 	defer srv.Close()
 	if _, err := VerifySessionWithClient(context.Background(), nil, srv.URL, "s", ""); err != nil {
