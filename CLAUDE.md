@@ -23,6 +23,12 @@ src/authn/          # verificación de identidad entre servicios
                     # (ErrNoSession/ErrInvalidSession/ErrUpstream/ErrNotConfigured)
   servicetoken.go   # CheckServiceToken: AUTH_SERVICE_TOKEN fail-closed,
                     # leído por request, comparado en tiempo constante
+src/mailq/          # cliente ÚNICO de correo transaccional (10 servicios lo usan)
+  mailq.go          # Send: publica en la cola AMQP notifications.mail, con
+                    # fallback a POST /queue/create; messageId uuid v4 e
+                    # idioma por defecto. Las variables viajan CRUDAS: el
+                    # escapado HTML es del renderizador (ver gotcha 13)
+  http.go           # transporte de fallback;  topology.go: exchange/colas
 src/obs/            # núcleo observabilidad (stdlib + gorilla/mux)
   obs.go            # Init(service) / NewTraceID / TraceID / WithTraceID
   fields.go         # Add(ctx,k,v) + Logger(ctx) — bolsa mutable en ctx
@@ -76,3 +82,4 @@ Ver `.env.sample` (inventario completo comentado). La lib no carga ficheros .env
 10. **`authn.VerifySession` nunca lleva la URL de oauth dentro**: se pasa por parámetro (env del servicio, con DNS de clúster). El hallazgo `profiles-01` fue exactamente eso: `https://oauth.service.zonatandas.es` hardcodeado, tráfico interno saliendo al ingress.
 11. **`authn.CheckServiceToken` con `AUTH_SERVICE_TOKEN` vacío devuelve `(false,false)`**: el llamante debe responder **503**, no 401 — es misconfig nuestra, no credencial mala del cliente. Colapsar ambos en 401 esconde el despliegue roto.
 12. Ramas inalcanzables conocidas (quedan sin cubrir, es esperado): el `"[error al enmascarar]"` de MaskJSON, la redacción por clave heredada en el caso escalar de maskValue, el fallback de NewTraceID y los `os.Exit` del CLI.
+13. **`mailq` NO escapa las variables — y no debe volver a hacerlo.** El escapado HTML pertenece a quien renderiza la plantilla (`mailer.replacePlaceholders` de notifications-service): es el único que sabe que el cuerpo va en `text/html` y el único con la lista de excepciones `htmlSafeKeys`. Cuando `mailq` también escapaba, todo se escapaba dos veces: el enlace de verificación de email acababa con `&amp;amp;` en el `href`, el navegador pedía `?email=…&amp;code=X` y el segundo parámetro pasaba a llamarse `amp;code`, así que la página nunca recibía el código. Además la cola se puede llenar por HTTP directo sin pasar por este paquete, así que escapar aquí tampoco cubriría ese camino. Regresión cubierta por `TestSendNoAlteraLasURLsDeLasVariables`.

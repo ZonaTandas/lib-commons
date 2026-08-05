@@ -5,10 +5,17 @@
 // el contrato JSON es el mismo por los dos caminos.
 //
 // Reglas que viven aquí y NO en los llamantes:
-//   - escapado HTML de las variables (las plantillas las inyectan tal cual);
 //   - messageId (uuid v4) para idempotencia at-least-once: notifications lo usa
 //     como PK de mail_queue y el duplicado es un no-op;
 //   - idioma por defecto "es".
+//
+// Las variables viajan CRUDAS a propósito. El escapado HTML es cosa de quien
+// renderiza la plantilla (mailer.replacePlaceholders de notifications), que es
+// el único que sabe que el cuerpo va en text/html y el único con la lista de
+// excepciones htmlSafeKeys. Escapar también aquí las escapaba dos veces y
+// rompió el enlace de verificación de email; además, la cola se puede llenar
+// por HTTP directo sin pasar por este paquete, así que escapar aquí tampoco
+// protegería ese camino.
 package mailq
 
 import (
@@ -17,7 +24,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"os"
 
 	"github.com/ZonaTandas/lib-commons/src/obs"
@@ -72,13 +78,9 @@ func Send(ctx context.Context, email Email) error {
 		email.MessageID = newUUID()
 	}
 
-	escaped := make(map[string]string, len(email.Variables))
-	for k, v := range email.Variables {
-		escaped[k] = html.EscapeString(v)
-	}
 	body, err := json.Marshal(Message{
 		MessageID: email.MessageID, ToEmail: email.To, Template: email.Template,
-		Language: email.Language, Variables: escaped,
+		Language: email.Language, Variables: email.Variables,
 		Attachments: email.Attachments, FromEmail: email.From,
 	})
 	if err != nil {

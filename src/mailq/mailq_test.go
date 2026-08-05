@@ -69,15 +69,51 @@ func TestSendFallsBackToHTTPWithoutBroker(t *testing.T) {
 	if got.Language != "es" {
 		t.Fatalf("language default debería ser es, fue %q", got.Language)
 	}
-	// El escapado HTML vive aquí, no en los llamantes (regla del rediseño §1).
-	if got.Variables["name"] != "Ana &lt;script&gt;" {
-		t.Fatalf("variable sin escapar: %q", got.Variables["name"])
+	// Las variables viajan CRUDAS. Escapar aquí las escapaba dos veces, porque
+	// notifications vuelve a hacerlo al renderizar la plantilla (notif-06).
+	if got.Variables["name"] != "Ana <script>" {
+		t.Fatalf("variable alterada en la cola: %q", got.Variables["name"])
 	}
 	if len(got.Attachments) != 1 || got.Attachments[0].URL != "https://internal/x.pdf" {
 		t.Fatalf("attachments perdidos: %+v", got.Attachments)
 	}
 	if !uuidRe.MatchString(got.MessageID) {
 		t.Fatalf("messageId no es uuid: %q", got.MessageID)
+	}
+}
+
+// Una URL con varios parámetros tiene que llegar a la cola tal cual. Escaparla
+// aquí convertía el `&` en `&amp;`, y como notifications escapa otra vez al
+// renderizar, el enlace acababa con `&amp;amp;` en el href: el navegador pedía
+// `?email=…&amp;code=X` y el segundo parámetro pasaba a llamarse `amp;code`.
+// Así se rompió el enlace de verificación de email.
+func TestSendNoAlteraLasURLsDeLasVariables(t *testing.T) {
+	restore(t)
+	t.Setenv("RABBITMQ_URL", "")
+	t.Setenv("AUTH_SERVICE_TOKEN", "secreto")
+
+	const verifyURL = "https://web.zonatandas.es/verify-email?email=ana%40example.com&code=51HM2B"
+
+	var got Message
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("body ilegible: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	t.Setenv("NOTIFICATIONS_SERVICE_URL", srv.URL)
+
+	err := Send(t.Context(), Email{
+		To:        "ana@example.com",
+		Template:  "email_verification",
+		Variables: map[string]string{"verifyUrl": verifyURL},
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got.Variables["verifyUrl"] != verifyURL {
+		t.Fatalf("la URL llegó alterada:\n  esperada: %s\n  recibida: %s", verifyURL, got.Variables["verifyUrl"])
 	}
 }
 
